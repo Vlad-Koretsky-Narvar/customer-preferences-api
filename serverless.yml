@@ -46,15 +46,15 @@ functions:
     #handler: handler.hello_get
     events:
       - http:
-          path: /api/v1/preferences/customer/
+          path: /api/v1/preferences/retailer/{retailer_moniker}/customer/{customer_id}
           #path: /hello/
           method: get
   post_customer_preference:
-    handler: dynamoDB_DAO.method_post
+    handler: dynamoDB_DAO.method_post2
     #handler: handler.hello_post
     events:
       - http:
-          path: /api/v1/preferences/customer/
+          path: /api/v1/preferences/retailer/{retailer_moniker}/customer/
           #path: /hello/
           method: post
 
