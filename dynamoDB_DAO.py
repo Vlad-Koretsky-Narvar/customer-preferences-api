@@ -14,7 +14,7 @@ NOTIFICATION_PREF_EMAIL = 'EMAIL'
 
 VALIDATION_MSG_CUSTOMER_ID = 'Invalid input: missing required [customer_id] parameter!'
 VALIDATION_MSG_RETAILER_MONIKER = 'Invalid input: missing required [retailer] parameter in customer_preferences!'
-EXCEPTION_SAVING_CUSTOMER_PREFERENCE = 'Stale data modification: the record you are trying to update has been updated by another process. Please refer to modified_datetime field in customer_details in the response for correct value to use.'
+VALIDATION_MSG_STALE_DATA_MODIFICATION = 'Stale data modification: the record you are trying to update has been updated by another process. Please refer to modified_datetime field in customer_preferences in the response for correct value to use.'
 VALIDATION_MSG_CUST_PREFS = 'Invalid input: missing required [customer_preferences] section parameter in request body.'
 VALIDATION_MSG_FIRST_NAME = 'Invalid input: missing required parameter [first_name] in customer_preferences.'
 VALIDATION_MSG_LAST_NAME = 'Invalid input: missing required parameter [last_name] in customer_preferences.'
@@ -30,37 +30,15 @@ VALIDATION_MSG_ADDRESS_STATE = 'Invalid input: missing required parameter [state
 VALIDATION_MSG_ADDRESS_ZIP = 'Invalid input: missing required parameter [zip] in address.'
 VALIDATION_MSG_ADDRESS_COUNTRY = 'Invalid input: missing required parameter [country] in address.'
 
-class Error(Exception):
-    '''Base class for server validation exceptions'''
-    responseCode = 400
-
 class InputValidationException(Exception):
-    '''Server Validation Exception'''
+    # Server Validation Exception
     responseCode = 400
     messages = []
     def __init__(self, err_msgs):
         Exception.__init__(self)
         self.messages = err_msgs
-'''
-class InputValidationRetailerMonikerException(Error):
-    # Server Validation Exception
-    msg = 'Missing parameter [retailer_moniker] in query parameters in the request!'
-
-class InputValidationMissingCustomerPreferencesException(Error):
-    # Server Validation Exception
-    msg = 'Missing parameter [customer_preferences] in request body!'
-
-class StaleDataModificationException(Error):
-    # Server Validation Exception
-    msg = 'Stale data modification: the record you are trying to update has been updated by another process. Please refer to modified_datetime field in customer_details in the response for correct value to use.'
-'''
 
 def method_get(event, context):
-    '''
-    retailer_moniker = 'narvar-speede'
-    customer_id = '123'
-    customerKey = makeKey(retailer_moniker, customer_id)
-    '''
     exception = None
 
     # Basic input validation:
@@ -73,13 +51,13 @@ def method_get(event, context):
         if not customer_id:
             error_msgs.append(VALIDATION_MSG_CUSTOMER_ID)
         if len(error_msgs) > 0:
-            raise InputValidationException(error_msgs) #InputValidationRetailerMonikerException
-    except InputValidationException as ivrme: #InputValidationRetailerMonikerException as ivrme:
+            raise InputValidationException(error_msgs)
+    except InputValidationException as ivrme:
         exception = ivrme
 
-    customer_details = {}
+    customer_preferences = {}
     if exception != None:
-        return makeResponse(customer_details, exception, None)
+        return makeResponse(customer_preferences, exception, None)
     # END OF: Basic input validation
 
     customerKey = makeKey(retailer_moniker, customer_id)
@@ -87,170 +65,63 @@ def method_get(event, context):
     result = {}
     try:
         result = findCustomerPreference(customerKey)
-        customer_details = makeCustomerDetails(result)
+        customer_preferences = makeCustomerDetails(result)
     except Exception as e:
         exception = e # Preserve exception for the response.
         # TODO: Log the exception.
 
-    return makeResponse(customer_details, exception, None)
-
-def method_post2(event, context):
-    exception = None
-    customer_details = {}
-
-    try:
-        if not event or not event.get('body') or not event.get('body'):
-            raise InputValidationMissingCustomerPreferencesException
-        req_body = json.loads(event.get('body'))
-        chupa = req_body.get('chupa')
-        if not chupa:
-            raise InputValidationMissingCustomerPreferencesException
-    except InputValidationMissingCustomerPreferencesException as ivmcpe:
-        exception = ivmcpe
-
-    if exception != None:
-        return makeResponse(customer_details, exception, event)
-    else:
-        return makeResponse(customer_details, exception, event)
-
-def validateCustomerPreferencesDict(cust_preferences_dict):
-    if not cust_preferences_dict:
-        raise Exception('Invalid input: customer preferences cannot be null.')
-    if(not cust_preferences_dict.get('fname')):
-        raise Exception('Invalid input: customer first name cannot be null.')
-    if(not cust_preferences_dict.get('lname')):
-        raise Exception('Invalid input: customer last name cannot be null.')
-    if(not cust_preferences_dict.get('locale')):
-        raise Exception('Invalid input: customer locale cannot be null.')
-
-    notification_preferences = cust_preferences_dict.get('notification_pref')
-    notification_preferences_details = cust_preferences_dict.get('notification_pref_details')
-
-    # Notification Preference and Notification Preferences Details lists cannot be null (but can be empty)
-    if(notification_preferences == None):
-        raise Exception('Invalid input: customer notification preferences cannot be null.')
-    else:
-        notification_preferences = sorted(notification_preferences)
-
-    if(notification_preferences_details == None):
-        raise Exception('Invalid input: customer notification preferences details cannot be null.')
-    notification_prefs_details_sorted = sorted(notification_preferences_details, key=lambda k: k['name'])
-
-    # Notification Preferences and Notification Preferences Details must be of the same length:
-    if len(notification_preferences) != len(notification_preferences_details):
-        raise Exception('Invalid input: customer notification preferences channels must match their details.')
-
-    # Loop through the channels and verify that the corresponding item is present in details:
-    idx = 0
-    for item in notification_preferences:
-        # Check for blank values:
-        if not item:
-            raise Exception('Invalid input: notification preference channels cannot be empty/null.')
-        # Check for allowed value options:
-        if not (item == NOTIFICATION_PREF_SMS or item == NOTIFICATION_PREF_FB or item == NOTIFICATION_PREF_EMAIL):
-            raise Exception('Invalid input: invalid notification preference value. Supported values are: ' +
-                            ''.join(NOTIFICATION_PREF_SMS, keyDelim, NOTIFICATION_PREF_FB, keyDelim, NOTIFICATION_PREF_EMAIL))
-        # Make sure that there is a corresponding option for Notification Preferences Details:
-        details = notification_prefs_details_sorted[idx]
-        if not details or item != details.get('name') or not details.get('value'):
-            raise Exception('Invalid input: missing customer notification preferences details for: ' + item)
-
-        idx += 1
-
-    # Validate address fields:
-    address = cust_preferences_dict.get('address')
-    if(not address):
-        raise Exception('Invalid input: customer address cannot be null.')
-    if not address.get('street_1'):
-        raise Exception('Invalid input: address street_1 field value cannot be null/empty.')
-    if not address.get('city'):
-        raise Exception('Invalid input: address city field value cannot be null/empty.')
-    if not address.get('state'):
-        raise Exception('Invalid input: address state field value cannot be null/empty.')
-    if not address.get('zip'):
-        raise Exception('Invalid input: address zip code field value cannot be null/empty.')
-    if not address.get('country'):
-        raise Exception('Invalid input: address country field value cannot be null/empty.')
-
+    return makeResponse(customer_preferences, exception, None)
 
 def method_post(event, context):
-    retailer_moniker = 'narvar-speede'
-    customer_id = '123'
-
-    address_dict = {}
-    address_dict['street_1'] = "123 Somewhere Street"
-    address_dict['street_2'] = "apt # 6"
-    address_dict['city'] = "SomeTown"
-    address_dict['state'] = "CA"
-    address_dict['country'] = "USA"
-    address_dict['zip'] = "12345"
-
-    notification_pref = ['EMAIL', 'SMS']
-    notification_pref_details = [{'name': 'SMS', 'value': '999-999-9999'}, {'name': 'EMAIL', 'value': 'chupa@cabra.com'}]
-
-    json_dict = {}
-    json_dict['fname'] = "Vlad"
-    json_dict['lname'] = "Test"
-    json_dict['locale'] = "en_US"
-    json_dict['address'] = address_dict
-    json_dict['notification_pref'] = notification_pref
-    json_dict['notification_pref_details'] = notification_pref_details
-
-    created_datetime = "2017-11-14T01:16:36.565029"
-    modified_datetime = "2017-12-20T22:53:30.122659"
-
     exception = None
+    customer_preferences = {}
+
     try:
-        saveCustomerPreference(retailer_moniker, customer_id, json_dict, created_datetime, modified_datetime)
-    except StaleDataModificationException as sdme:
-        exception = sdme
+        error_msgs = []
+        retailer_moniker = event['pathParameters']['retailer_moniker']
+        customer_id = event['pathParameters']['customer_id']
+        if not retailer_moniker:
+            error_msgs.append(VALIDATION_MSG_RETAILER_MONIKER)
+        if not customer_id:
+            error_msgs.append(VALIDATION_MSG_CUSTOMER_ID)
+        if len(error_msgs) > 0:
+            raise InputValidationException(error_msgs)
+
+        if not event or not event.get('body') or not event.get('body'):
+            error_msgs.append(VALIDATION_MSG_CUST_PREFS)
+            raise InputValidationException(error_msgs)
+
+        cust_prefs = json.loads(event.get('body')).get('customer_preferences')
+        validateCustomerPreferences(cust_prefs)
+    except Exception as e:
+        exception = e
+        # TODO: Log exception here.
+
+    if exception != None:
+        return makeResponse(customer_preferences, exception, None)
+
+    try:
+        saveCustomerPreference(retailer_moniker, customer_id, cust_prefs)
     except Exception as e:
         exception = e # Preserve exception for later response.
         # TODO: Log exception here.
 
     customerKey = makeKey(retailer_moniker, customer_id)
     search_result = findCustomerPreference(customerKey)
-    customer_details = makeCustomerDetails(search_result)
+    customer_preferences = makeCustomerDetails(search_result)
 
-    statusCode = 200
-    body = {}
-    if not exception:
-        # Success:
-        body['message'] = 'Customer preferences successfully saved.'
-    else:
-        # Failure:
-        body['message'] = 'Exception saving customer preferences!'
-        if type(exception) == StaleDataModificationException:
-            statusCode = exception.responseCode
-            body['exception_message'] = exception.msg
-        else:
-            statusCode = 500
-            body['exception_message'] = exception.args[0]
+    return makeResponse(customer_preferences, exception, None)
 
-    body['input'] = event
-    body['customer_details'] = customer_details
-
-    response = {
-        "statusCode": statusCode,
-        "body": json.dumps(body)
-    }
-    return response
-
-def saveCustomerPreference(retailer_moniker, customer_id, cust_preferences_dict, created_datetime, modified_datetime):
-    if not retailer_moniker:
-        raise Exception('Invalid input: retailer_moniker cannot be empty/null.')
-    if not customer_id:
-        raise Exception('Invalid input: customer_id cannot be empty/null.')
-    #validateCustomerPreferencesDict(cust_preferences_dict)
-
+def saveCustomerPreference(retailer_moniker, customer_id, cust_preferences):
     db = boto3.client('dynamodb');
 
     id = makeKey(retailer_moniker, customer_id)
 
+    modified_datetime = cust_preferences['modified_datetime']
     if not modified_datetime:
         modified_datetime = datetime.datetime.utcnow().isoformat()
-    if not created_datetime:
-        created_datetime = modified_datetime
+
+    created_datetime = modified_datetime
 
     # Find if the record already exists and perform some checks:
     dbVersion = findCustomerPreference(id)
@@ -261,13 +132,14 @@ def saveCustomerPreference(retailer_moniker, customer_id, cust_preferences_dict,
         created_datetime = dbVersion.get('created_datetime')
 
         if dbVersion.get('modified_datetime') != modified_datetime:
-            #raise Exception(EXCEPTION_SAVING_CUSTOMER_PREFERENCE)
-            raise StaleDataModificationException()
+            error_msgs = []
+            error_msgs.append(VALIDATION_MSG_STALE_DATA_MODIFICATION)
+            raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
 
     # Make a string version of JSON to store:
-    customer_pref_json = json.dumps(cust_preferences_dict)
+    customer_pref_json = json.dumps(cust_preferences)
 
     response = db.put_item(
         TableName = cust_table_name,
@@ -281,9 +153,6 @@ def saveCustomerPreference(retailer_moniker, customer_id, cust_preferences_dict,
         },
         ReturnValues='NONE'
     )
-    print("Response for inserting a record for the key: ", id, str(response))
-
-    return True
 
 def findCustomerPreference(key):
     db = boto3.client('dynamodb');
@@ -307,6 +176,71 @@ def findCustomerPreference(key):
 
     return result
 
+def validateCustomerPreferences(cust_preferences_dict):
+    error_msgs = []
+
+    # No point in checking further if this check fails:
+    if not cust_preferences_dict:
+        error_msgs.append(VALIDATION_MSG_CUST_PREFS)
+        raise InputValidationException(error_msgs)
+
+    if(not cust_preferences_dict.get('first_name')):
+        error_msgs.append(VALIDATION_MSG_FIRST_NAME)
+    if(not cust_preferences_dict.get('last_name')):
+        error_msgs.append(VALIDATION_MSG_LAST_NAME)
+
+    notification_preferences = cust_preferences_dict.get('notification_pref')
+    notification_preferences_details = cust_preferences_dict.get('notification_pref_details')
+
+    # Notification Preference and Notification Preferences Details lists cannot be null (but can be empty)
+    if(notification_preferences == None):
+        error_msgs.append(VALIDATION_MSG_NOTIFICATION_PREFS)
+        raise InputValidationException(error_msgs)
+    else:
+        notification_preferences = sorted(notification_preferences)
+
+    if(notification_preferences_details == None):
+        error_msgs.append(VALIDATION_MSG_NOTIFICATION_PREFS_DETAILS)
+        raise InputValidationException(error_msgs)
+    notification_pref_details_sorted = sorted(notification_preferences_details, key=lambda k: k['name'])
+
+    # Notification Preferences and Notification Preferences Details must be of the same length:
+    if len(notification_preferences) != len(notification_pref_details_sorted):
+        error_msgs.append(VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_LENGTH)
+
+    # Loop through the channels and verify that the corresponding item is present in details:
+    idx = 0
+    for item in notification_preferences:
+        # Check for allowed value options:
+        if not item or not (item == NOTIFICATION_PREF_SMS or item == NOTIFICATION_PREF_FB or item == NOTIFICATION_PREF_EMAIL):
+            error_msgs.append(VALIDATION_MSG_NOTIFICATION_PREFS_CHANNEL)
+
+        # Make sure that there is a corresponding option for Notification Preferences Details:
+        details = notification_pref_details_sorted[idx]
+        if not details or item != details.get('name') or not details.get('value'):
+            error_msgs.append(VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_ITEM + item)
+
+        idx += 1
+
+    # Validate address fields:
+    address = cust_preferences_dict.get('address')
+    if(not address):
+        error_msgs.append(VALIDATION_MSG_ADDRESS)
+        raise InputValidationException(error_msgs)
+    if not address.get('street_1'):
+        error_msgs.append(VALIDATION_MSG_ADDRESS_STREET1)
+    if not address.get('city'):
+        error_msgs.append(VALIDATION_MSG_ADDRESS_CITY)
+    if not address.get('state'):
+        error_msgs.append(VALIDATION_MSG_ADDRESS_STATE)
+    if not address.get('zip'):
+        error_msgs.append(VALIDATION_MSG_ADDRESS_ZIP)
+    if not address.get('country'):
+        error_msgs.append(VALIDATION_MSG_ADDRESS_COUNTRY)
+
+    if len(error_msgs) > 0:
+        raise InputValidationException(error_msgs)
+
 def makeKey(retailer_moniker, customer_id):
     return ''.join([retailer_moniker, keyDelim, customer_id])
 
@@ -319,8 +253,8 @@ def makeCustomerDetails(response):
     if response.get('customer_pref_json') != None:
         customer_pref_json = json.loads(response.get('customer_pref_json'))
 
-        result['fname'] = customer_pref_json.get('fname')
-        result['lname'] = customer_pref_json.get('lname')
+        result['first_name'] = customer_pref_json.get('first_name')
+        result['last_name'] = customer_pref_json.get('last_name')
         result['locale'] = customer_pref_json.get('locale')
         result['address'] = customer_pref_json.get('address')
         result['notification_pref'] = customer_pref_json.get('notification_pref')
@@ -351,7 +285,7 @@ def populateRecordFromDynamoDB(response):
 
     return result
 
-def makeResponse(customer_details, exception, event):
+def makeResponse(customer_preferences, exception, event):
     statusCode = 200
     body = {}
     if not exception:
@@ -369,8 +303,9 @@ def makeResponse(customer_details, exception, event):
         else:
             statusCode = 500
             body['exception_messages'] = exception.args[0]
+            body['warning_messages'] = 'standard exception'
 
-    body['customer_details'] = customer_details
+    body['customer_preferences'] = customer_preferences
     if(event):
         body['input'] = event
 
