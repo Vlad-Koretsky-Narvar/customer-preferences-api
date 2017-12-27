@@ -18,7 +18,8 @@ service: my-lambda-service
 # frameworkVersion: "=X.X.X"
 
 custom:
-  tableName: 'customer-preferences-${self:provider.stage}'
+  customerPreferencesTableName: 'customer-preferences-${self:provider.stage}'
+  orderPreferencesTableName: 'order-preferences-${self:provider.stage}'
 
 provider:
   name: aws
@@ -37,32 +38,29 @@ provider:
       Resource:
         - { "Fn::GetAtt": [ "CustomerPreferencesDynamoDBTable", "Arn" ] }
 
-  environment:
-    USERS_TABLE: ${self:custom.tableName}
-
 functions:
   get_customer_preference:
-    handler: dynamoDB_DAO.method_get
+    handler: CustomerPreferences.method_get
     #handler: handler.hello_get
     events:
       - http:
-          path: /api/v1/preferences/retailer/{retailer_moniker}/customer/{customer_id}
+          path: /api/v1/customer-preferences/retailer/{retailer_moniker}/customer/{customer_id}
           #path: /hello/
           method: get
   post_customer_preference:
-    handler: dynamoDB_DAO.method_post_put
+    handler: CustomerPreferences.method_post_put
     #handler: handler.hello_post
     events:
       - http:
-          path: /api/v1/preferences/retailer/{retailer_moniker}/customer/{customer_id}
+          path: /api/v1/customer-preferences/retailer/{retailer_moniker}/customer/{customer_id}
           #path: /hello/
           method: post
   put_customer_preference:
-    handler: dynamoDB_DAO.method_post_put
+    handler: CustomerPreferences.method_post_put
     #handler: handler.hello_post
     events:
       - http:
-          path: /api/v1/preferences/retailer/{retailer_moniker}/customer/{customer_id}
+          path: /api/v1/customer-preferences/retailer/{retailer_moniker}/customer/{customer_id}
           #path: /hello/
           method: put
 
@@ -71,19 +69,34 @@ resources:
     CustomerPreferencesDynamoDBTable:
       Type: 'AWS::DynamoDB::Table'
       Properties:
-        TableName: ${self:custom.tableName}
+        TableName: ${self:custom.customerPreferencesTableName}
         KeySchema:
-          - 
+          -
             AttributeName: id
             KeyType: HASH
         AttributeDefinitions:
-          - 
+          -
             AttributeName: id
             AttributeType: S
         ProvisionedThroughput:
           ReadCapacityUnits: 1
           WriteCapacityUnits: 1
-          
+    OrderPreferencesDynamoDBTable:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        TableName: ${self:custom.orderPreferencesTableName}
+        KeySchema:
+          -
+            AttributeName: id
+            KeyType: HASH
+        AttributeDefinitions:
+          -
+            AttributeName: id
+            AttributeType: S
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+
 
 # you can overwrite defaults here
 #  stage: dev

@@ -29,7 +29,7 @@ VALIDATION_MSG_ADDRESS_STATE = 'Invalid input: missing required parameter [state
 VALIDATION_MSG_ADDRESS_ZIP = 'Invalid input: missing required parameter [zip] in address.'
 VALIDATION_MSG_ADDRESS_COUNTRY = 'Invalid input: missing required parameter [country] in address.'
 VALIDATION_MSG_POST_DATA_EXISTS = 'Invalid input: you are trying to submit a POST request on an existing customer_preference. Use PUT instead.'
-VALIDATION_MSG_PUT_DATA_NOT_EXISTS = 'Invalid input: you are tyring to submit a PUT request on a resource that does not exist. Use POST instead.'
+VALIDATION_MSG_PUT_DATA_NOT_EXISTS = 'Invalid input: you are tyring to submit a PUT request on a customer_preference that does not exist. Use POST instead.'
 
 class InputValidationException(Exception):
     # Server Validation Exception
@@ -72,7 +72,8 @@ def method_get(event, context):
 
     result = {}
     try:
-        result = __findCustomerPreference(customerKey)
+        db = boto3.client('dynamodb');
+        result = __findCustomerPreference(db, customerKey)
         customer_preferences = __makeCustomerDetails(result)
     except Exception as e:
         exception = e # Preserve exception for the response.
@@ -95,11 +96,15 @@ def method_post_put(event, context):
         if len(error_msgs) > 0:
             raise InputValidationException(error_msgs)
 
-        if not event or not event.get('body') or not event.get('body'):
+        if not event or not event.get('body'):
             error_msgs.append(ResponseMessage('ERROR', None, 'customer_preferences', VALIDATION_MSG_CUST_PREFS))
             raise InputValidationException(error_msgs)
 
         cust_prefs = json.loads(event.get('body')).get('customer_preferences')
+        if not cust_prefs:
+            error_msgs.append(ResponseMessage('ERROR', None, 'customer_preferences', VALIDATION_MSG_CUST_PREFS))
+            raise InputValidationException(error_msgs)
+
         __validateCustomerPreferences(cust_prefs)
     except Exception as e:
         exception = e
@@ -108,20 +113,20 @@ def method_post_put(event, context):
     if exception != None:
         return __makeResponse(customer_preferences, exception, None)
 
+    db = boto3.client('dynamodb');
     try:
-        __saveCustomerPreference(retailer_moniker, customer_id, cust_prefs, event.get('httpMethod'))
+        __saveCustomerPreference(db, retailer_moniker, customer_id, cust_prefs, event.get('httpMethod'))
     except Exception as e:
         exception = e # Preserve exception for later response.
         # TODO: Log exception here.
 
-    customerKey = __makeKey(retailer_moniker, customer_id)
-    search_result = __findCustomerPreference(customerKey)
+    id = __makeKey(retailer_moniker, customer_id)
+    search_result = __findCustomerPreference(db, id)
     customer_preferences = __makeCustomerDetails(search_result)
 
     return __makeResponse(customer_preferences, exception, None)
 
-def __saveCustomerPreference(retailer_moniker, customer_id, cust_preferences, httpMethod):
-    db = boto3.client('dynamodb');
+def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences, httpMethod):
 
     id = __makeKey(retailer_moniker, customer_id)
 
@@ -132,7 +137,7 @@ def __saveCustomerPreference(retailer_moniker, customer_id, cust_preferences, ht
     created_datetime = modified_datetime
 
     # Find if the record already exists and perform some checks:
-    dbRec = __findCustomerPreference(id)
+    dbRec = __findCustomerPreference(db, id)
 
     error_msgs = []
     if(httpMethod == 'POST' and dbRec):
@@ -175,8 +180,7 @@ def __save(db, id, retailer_moniker, customer_id, cust_preferences, created_date
         ReturnValues='NONE'
     )
 
-def __findCustomerPreference(key):
-    db = boto3.client('dynamodb');
+def __findCustomerPreference(db, key):
 
     response = db.get_item(
         TableName=cust_table_name,
