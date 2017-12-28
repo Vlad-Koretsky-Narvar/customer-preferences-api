@@ -37,6 +37,7 @@ provider:
         - dynamodb:DeleteItem
       Resource:
         - { "Fn::GetAtt": [ "CustomerPreferencesDynamoDBTable", "Arn" ] }
+        - { "Fn::GetAtt": [ "OrderPreferencesDynamoDBTable", "Arn" ] }
 
 functions:
   get_customer_preference:
@@ -62,6 +63,25 @@ functions:
       - http:
           path: /api/v1/customer-preferences/retailer/{retailer_moniker}/customer/{customer_id}
           #path: /hello/
+          method: put
+  get_order_preference:
+    handler: OrderPreferences.method_get
+    events:
+      - http:
+          path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}
+          #path: /hello/
+          method: get
+  post_order_preference:
+    handler: OrderPreferences.method_post_put
+    events:
+      - http:
+          path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}/order/{order_id}
+          method: post
+  put_order_preference:
+    handler: OrderPreferences.method_post_put
+    events:
+      - http:
+          path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}/order/{order_id}
           method: put
 
 resources:
