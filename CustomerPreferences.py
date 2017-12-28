@@ -4,7 +4,6 @@ import json
 import traceback
 
 cust_table_name = 'customer-preferences-dev'
-#order_table_name = 'order_preferences'
 keyDelim = '|'
 
 NOTIFICATION_PREF_SMS = 'SMS'
@@ -130,7 +129,7 @@ def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences
 
     id = __makeKey(retailer_moniker, customer_id)
 
-    modified_datetime = cust_preferences['modified_datetime']
+    modified_datetime = cust_preferences.get('modified_datetime')
     if not modified_datetime:
         modified_datetime = datetime.datetime.utcnow().isoformat()
 
@@ -159,6 +158,8 @@ def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences
             raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
+            # Strip out modified_datetime from cust_pref_json input (it is there only for the client display):
+            cust_preferences.pop('modified_datetime', None)
 
     __save(db, id, retailer_moniker, customer_id, cust_preferences, created_datetime, modified_datetime)
 
@@ -201,21 +202,21 @@ def __findCustomerPreference(db, key):
 
     return result
 
-def __validateCustomerPreferences(cust_preferences_dict):
+def __validateCustomerPreferences(cust_preferences):
     error_msgs = []
 
     # No point in checking further if this check fails:
-    if not cust_preferences_dict:
+    if not cust_preferences:
         error_msgs.append(ResponseMessage('ERROR', None, 'customer_preferences', VALIDATION_MSG_CUST_PREFS))
         raise InputValidationException(error_msgs)
 
-    if(not cust_preferences_dict.get('first_name')):
+    if(not cust_preferences.get('first_name')):
         error_msgs.append(ResponseMessage('ERROR', None, 'first_name', VALIDATION_MSG_FIRST_NAME))
-    if(not cust_preferences_dict.get('last_name')):
+    if(not cust_preferences.get('last_name')):
         error_msgs.append(ResponseMessage('ERROR', None, 'last_name', VALIDATION_MSG_LAST_NAME))
 
-    notification_preferences = cust_preferences_dict.get('notification_pref')
-    notification_preferences_details = cust_preferences_dict.get('notification_pref_details')
+    notification_preferences = cust_preferences.get('notification_pref')
+    notification_preferences_details = cust_preferences.get('notification_pref_details')
 
     # Notification Preference and Notification Preferences Details lists cannot be null (but can be empty)
     if(notification_preferences == None):
@@ -232,6 +233,7 @@ def __validateCustomerPreferences(cust_preferences_dict):
     # Notification Preferences and Notification Preferences Details must be of the same length:
     if len(notification_preferences) != len(notification_pref_details_sorted):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_LENGTH))
+        raise InputValidationException(error_msgs)
 
     # Loop through the channels and verify that the corresponding item is present in details:
     idx = 0
@@ -248,7 +250,7 @@ def __validateCustomerPreferences(cust_preferences_dict):
         idx += 1
 
     # Validate address fields:
-    address = cust_preferences_dict.get('address')
+    address = cust_preferences.get('address')
     if(not address):
         error_msgs.append(ResponseMessage('ERROR', None, 'address', VALIDATION_MSG_ADDRESS))
         raise InputValidationException(error_msgs)
@@ -265,6 +267,10 @@ def __validateCustomerPreferences(cust_preferences_dict):
 
     if len(error_msgs) > 0:
         raise InputValidationException(error_msgs)
+
+    # Default locale if missing:
+    if not cust_preferences.get('locale'):
+        cust_preferences['locale'] = 'en_US'
 
 def __makeKey(retailer_moniker, customer_id):
     return ''.join([retailer_moniker, keyDelim, customer_id])
@@ -306,7 +312,10 @@ def __populateRecordFromDynamoDB(response):
     if item.get('modified_datetime') != None:
         result['modified_datetime'] = response.get('Item').get('modified_datetime').get('S')
     if item.get('customer_pref_json') != None:
-        result['customer_pref_json'] = response.get('Item').get('customer_pref_json').get('S')
+        customer_pref = json.loads(response.get('Item').get('customer_pref_json').get('S'))
+        # Populate modified_datetime for client display purposes:
+        customer_pref['modified_datetime'] = result.get('modified_datetime')
+        result['customer_pref_json'] = json.dumps(customer_pref)
 
     return result
 

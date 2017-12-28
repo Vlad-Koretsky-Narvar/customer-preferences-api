@@ -7,6 +7,10 @@ cust_table_name = 'customer-preferences-dev'
 order_table_name = 'order-preferences-dev'
 keyDelim = '|'
 
+NOTIFICATION_PREF_SMS = 'SMS'
+NOTIFICATION_PREF_FB = 'FB'
+NOTIFICATION_PREF_EMAIL = 'EMAIL'
+
 VALIDATION_MSG_RETAILER_MONIKER = 'Invalid input: missing required [retailer] parameter in customer_preferences!'
 VALIDATION_MSG_CUSTOMER_ID = 'Invalid input: missing required [customer_id] parameter!'
 VALIDATION_MSG_ORDER_ID = 'Invalid input: missing required [order_id] parameter!'
@@ -14,6 +18,14 @@ VALIDATION_MSG_STALE_DATA_MODIFICATION = 'Stale data modification: the record yo
 VALIDATION_MSG_ORDER_PREFS = 'Invalid input: missing required [order_preferences] section parameter in request body.'
 VALIDATION_MSG_POST_DATA_EXISTS = 'Invalid input: you are trying to submit a POST request on an existing order_preference. Use PUT instead.'
 VALIDATION_MSG_PUT_DATA_NOT_EXISTS = 'Invalid input: you are tyring to submit a PUT request on an order_preference that does not exist. Use POST instead.'
+VALIDATION_MSG_ORDER_PREFS = 'Invalid input: missing required [order_preferences] section parameter in request body.'
+VALIDATION_MSG_FIRST_NAME = 'Invalid input: missing required parameter [first_name] in order_preferences.'
+VALIDATION_MSG_LAST_NAME = 'Invalid input: missing required parameter [last_name] in order_preferences.'
+VALIDATION_MSG_NOTIFICATION_PREFS = 'Invalid input: missing required [notification_pref] section parameter in order_preferences.'
+VALIDATION_MSG_NOTIFICATION_PREFS_DETAILS = 'Invalid input: missing required [notification_pref_details] section parameter in order_preferences.'
+VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_LENGTH = 'Invalid input: channels in [notification_pref] must match with their [notification_pref_details].'
+VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_ITEM = 'Invalid input: missing order [notification_pref_details] for: '
+VALIDATION_MSG_NOTIFICATION_PREFS_CHANNEL = 'Invalid input: invalid notification preference value. Supported values are: ' + ''.join([NOTIFICATION_PREF_SMS, keyDelim, NOTIFICATION_PREF_FB, keyDelim, NOTIFICATION_PREF_EMAIL])
 
 class InputValidationException(Exception):
     # Server Validation Exception
@@ -123,6 +135,8 @@ def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_pre
             raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
+            # Strip out modified_datetime from order_pref_json input (it is there only for the client display):
+            order_preferences.pop('modified_datetime', None)
 
 
     __save(db, id, retailer_moniker, customer_id, order_id, order_preferences, created_datetime, modified_datetime)
@@ -209,7 +223,10 @@ def __populateRecordFromDynamoDB(response):
     if item.get('modified_datetime') != None:
         result['modified_datetime'] = response.get('Item').get('modified_datetime').get('S')
     if item.get('order_pref_json') != None:
-        result['order_pref_json'] = response.get('Item').get('order_pref_json').get('S')
+        order_pref = json.loads(response.get('Item').get('order_pref_json').get('S'))
+        # Populate modified_datetime for client display purposes:
+        order_pref['modified_datetime'] = result.get('modified_datetime')
+        result['order_pref_json'] = json.dumps(order_pref)
 
     return result
 
@@ -227,7 +244,7 @@ def __makeOrderDetails(response):
         order_pref['first_name'] = order_pref_json.get('first_name')
         order_pref['last_name'] = order_pref_json.get('last_name')
         order_pref['locale'] = order_pref_json.get('locale')
-        order_pref['address'] = order_pref_json.get('address')
+        order_pref['is_guest'] = order_pref_json.get('is_guest')
         order_pref['notification_pref'] = order_pref_json.get('notification_pref')
         order_pref['notification_pref_details'] = order_pref_json.get('notification_pref_details')
         order_pref['modified_datetime'] = response.get('modified_datetime')
@@ -285,8 +302,60 @@ def __makeResponse(order_preferences, exception, event):
     return response
 
 # TODO: implement.
-def __validateOrderPreferences(order_preferences_dict):
+def __validateOrderPreferences(order_preferences):
     error_msgs = []
+
+    # No point in checking further if this check fails:
+    if not order_preferences:
+        error_msgs.append(ResponseMessage('ERROR', None, 'customer_preferences', VALIDATION_MSG_ORDER_PREFS))
+        raise InputValidationException(error_msgs)
+
+    if(not order_preferences.get('first_name')):
+        error_msgs.append(ResponseMessage('ERROR', None, 'first_name', VALIDATION_MSG_FIRST_NAME))
+    if(not order_preferences.get('last_name')):
+        error_msgs.append(ResponseMessage('ERROR', None, 'last_name', VALIDATION_MSG_LAST_NAME))
+
+    notification_preferences = order_preferences.get('notification_pref')
+    notification_preferences_details = order_preferences.get('notification_pref_details')
+
+    # Notification Preference and Notification Preferences Details lists cannot be null (but can be empty)
+    if(notification_preferences == None):
+        error_msgs.append(ResponseMessage('ERROR', None, 'notification_pref', VALIDATION_MSG_NOTIFICATION_PREFS))
+        raise InputValidationException(error_msgs)
+    else:
+        notification_preferences = sorted(notification_preferences)
+
+    if(notification_preferences_details == None):
+        error_msgs.append(ResponseMessage('ERROR', None, 'notification_pref_details', VALIDATION_MSG_NOTIFICATION_PREFS_DETAILS))
+        raise InputValidationException(error_msgs)
+    notification_pref_details_sorted = sorted(notification_preferences_details, key=lambda k: k['name'])
+
+    # Notification Preferences and Notification Preferences Details must be of the same length:
+    if len(notification_preferences) != len(notification_pref_details_sorted):
+        error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_LENGTH))
+        raise InputValidationException(error_msgs)
+
+    # Loop through the channels and verify that the corresponding item is present in details:
+    idx = 0
+    for item in notification_preferences:
+        # Check for allowed value options:
+        if not item or not (item == NOTIFICATION_PREF_SMS or item == NOTIFICATION_PREF_FB or item == NOTIFICATION_PREF_EMAIL):
+            error_msgs.append(ResponseMessage('ERROR', None, 'notification_pref', VALIDATION_MSG_NOTIFICATION_PREFS_CHANNEL))
+
+        # Make sure that there is a corresponding option for Notification Preferences Details:
+        details = notification_pref_details_sorted[idx]
+        if not details or item != details.get('name') or not details.get('value'):
+            error_msgs.append(ResponseMessage('ERROR', None, 'notification_pref_details', VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_ITEM + item))
+
+        idx += 1
 
     if len(error_msgs) > 0:
         raise InputValidationException(error_msgs)
+
+    # Default locale if missing:
+    if not order_preferences.get('locale'):
+        order_preferences['locale'] = 'en_US'
+
+    # Default is_guest if missing:
+    if not order_preferences.get('is_guest'):
+        order_preferences['is_guest'] = False
