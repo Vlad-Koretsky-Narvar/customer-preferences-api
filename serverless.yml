@@ -20,12 +20,14 @@ service: my-lambda-service
 custom:
   customerPreferencesTableName: 'customer-preferences-${self:provider.stage}'
   orderPreferencesTableName: 'order-preferences-${self:provider.stage}'
+  orderPreferenceTableGSI-RetailerCustomer: 'retailer-customer-idx-${self:provider.stage}'
 
 provider:
   name: aws
   runtime: python3.6
   stage: dev
   region: us-east-1
+  accountNo: 973464575035
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -38,6 +40,7 @@ provider:
       Resource:
         - { "Fn::GetAtt": [ "CustomerPreferencesDynamoDBTable", "Arn" ] }
         - { "Fn::GetAtt": [ "OrderPreferencesDynamoDBTable", "Arn" ] }
+        - "arn:aws:dynamodb:${self:provider.region}:${self:provider.accountNo}:table/${self:custom.orderPreferencesTableName}/index/*"
 
 functions:
   get_customer_preference:
@@ -66,6 +69,7 @@ functions:
           method: put
   get_order_preference:
     handler: OrderPreferences.method_get
+    #handler: test.method_get
     events:
       - http:
           path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}
@@ -113,6 +117,27 @@ resources:
           -
             AttributeName: id
             AttributeType: S
+          -
+            AttributeName: scan_id
+            AttributeType: S
+          -
+            AttributeName: order_id
+            AttributeType: S
+        GlobalSecondaryIndexes:
+          #- IndexName: ${self:custom.orderPreferenceTableGSI-RetailerCustomer}
+          - IndexName: retailer-customer-idx
+            KeySchema:
+              - AttributeName: scan_id
+                KeyType: HASH
+              - AttributeName: order_id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: INCLUDE
+              NonKeyAttributes:
+                - is_active
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
         ProvisionedThroughput:
           ReadCapacityUnits: 1
           WriteCapacityUnits: 1

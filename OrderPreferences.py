@@ -1,10 +1,13 @@
 import boto3
+from boto3.dynamodb.conditions import Key, Attr
 import datetime
 import json
 import traceback
+import test
 
 cust_table_name = 'customer-preferences-dev'
 order_table_name = 'order-preferences-dev'
+order_table_gsi_name = 'retailer-customer-idx'
 keyDelim = '|'
 
 NOTIFICATION_PREF_SMS = 'SMS'
@@ -43,8 +46,62 @@ class ResponseMessage:
         self.message = message
 
 def method_get(event, context):
-    # TODO:
-    print("get")
+    exception = None
+    order_id = None
+
+    # Basic input validation:
+    try:
+        error_msgs = []
+        retailer_moniker = event.get('pathParameters').get('retailer_moniker')
+        customer_id = event.get('pathParameters').get('customer_id')
+
+        is_include_inactive = event.get('queryStringParameters').get('is_include_inactive')
+        if not is_include_inactive or is_include_inactive.casefold() != 'true':
+            is_include_inactive = False
+        else:
+            is_include_inactive = True
+
+        if not retailer_moniker:
+            error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
+        if not customer_id:
+            error_msgs.append(ResponseMessage('ERROR', None, 'customer_id', VALIDATION_MSG_CUSTOMER_ID))
+        if len(error_msgs) > 0:
+            raise InputValidationException(error_msgs)
+
+        if event.get('queryStringParameters'):
+            order_id = event.get('queryStringParameters').get('order_id') or None
+    except InputValidationException as e:
+        exception = e
+
+    try:
+        order_preferences = []
+        if exception != None:
+            return __makeResponse(order_preferences, exception, None)
+        # END OF: Basic input validation
+
+        key = __makeKey(retailer_moniker, customer_id, order_id)
+        db = boto3.client('dynamodb');
+        if order_id:
+            result = {}
+            try:
+                result = __findOrderPreference(db, key)
+                order_preferences = __makeOrderDetails(result)
+            except Exception as e:
+                exception = e # Preserve exception for the response.
+                # TODO: Log the exception.
+        else:
+            result = []
+            try:
+                result = __findAllOrderPreferences(db, key, is_include_inactive)
+                order_preferences = __makeOrderDetails(result)
+            except Exception as e:
+                exception = e # Preserve exception for the response.
+                # TODO: Log the exception.
+    except Exception as e:
+        exception = e
+
+    return __makeResponse(order_preferences, exception, None)
+    #return test.method_get(event, context)
 
 def method_post_put(event, context):
     exception = None
@@ -52,9 +109,9 @@ def method_post_put(event, context):
 
     try:
         error_msgs = []
-        retailer_moniker = event['pathParameters']['retailer_moniker']
-        customer_id = event['pathParameters']['customer_id']
-        order_id = event['pathParameters']['order_id']
+        retailer_moniker = event.get('pathParameters').get('retailer_moniker')
+        customer_id = event.get('pathParameters').get('customer_id')
+        order_id = event.get('pathParameters').get('order_id')
         if not retailer_moniker:
             error_msgs.append(ResponseMessage('ERROR', None, 'retailer', VALIDATION_MSG_RETAILER_MONIKER))
         if not customer_id:
@@ -83,9 +140,10 @@ def method_post_put(event, context):
     # END OF: Basic input validation
 
     input = {}
-    db = boto3.client('dynamodb');
+    db = boto3.client('dynamodb')
     try:
-        __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_prefs, event.get('httpMethod'))
+        is_active = True # TODO: hard-coding for now - need to discuss use-cases further!
+        __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active, order_prefs, event.get('httpMethod'))
     except Exception as e:
         exception = e # Preserve exception for later response.
         # TODO: Log exception here.
@@ -97,11 +155,11 @@ def method_post_put(event, context):
     except Exception as e:
         exception = e
 
-    order_preferences.append(__makeOrderDetails(search_result))
+    order_preferences = __makeOrderDetails(search_result)
 
     return __makeResponse(order_preferences, exception, None)
 
-def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_preferences, httpMethod):
+def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active, order_preferences, httpMethod):
     error_msgs = []
 
     id = __makeKey(retailer_moniker, customer_id, order_id)
@@ -113,7 +171,7 @@ def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_pre
     created_datetime = modified_datetime
 
     # Find if the record already exists and perform some checks:
-    dbRec = __findOrderPreference(db, id)
+    dbRec = __findOrderPreference(db, id)[0]
 
     if(httpMethod == 'POST' and dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_POST_DATA_EXISTS))
@@ -135,13 +193,16 @@ def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_pre
             raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
-            # Strip out modified_datetime from order_pref_json input (it is there only for the client display):
+            # Strip out modified_datetime and is_active from order_pref_json input (it is there only for the client display):
             order_preferences.pop('modified_datetime', None)
+            order_preferences.pop('is_active', None)
 
 
-    __save(db, id, retailer_moniker, customer_id, order_id, order_preferences, created_datetime, modified_datetime)
+    __save(db, id, retailer_moniker, customer_id, order_id, is_active, order_preferences, created_datetime, modified_datetime)
 
-def __save(db, id, retailer_moniker, customer_id, order_id, order_preferences, created_datetime, modified_datetime):
+def __save(db, id, retailer_moniker, customer_id, order_id, is_active, order_preferences, created_datetime, modified_datetime):
+
+    scan_id = __makeKey(retailer_moniker, customer_id, None)
 
     # Make a string version of JSON to store:
     order_pref_json = json.dumps(order_preferences)
@@ -150,9 +211,11 @@ def __save(db, id, retailer_moniker, customer_id, order_id, order_preferences, c
         TableName = order_table_name,
         Item={
             'id': {'S': id},
+            'scan_id': {'S': scan_id},
             'retailer_moniker': {'S': retailer_moniker},
             'customer_id': {'S': customer_id},
             'order_id': {'S': order_id},
+            'is_active': {'BOOL': is_active },
             'order_pref_json': {'S': order_pref_json},
             'created_datetime': {'S': created_datetime},
             'modified_datetime': {'S': modified_datetime},
@@ -178,52 +241,92 @@ def __findOrderPreference(db, key):
         ]
     )
 
-    result = __populateRecordFromDynamoDB(response)
-
-    return result
-
-def __findAllOrderPreferences(db, retailer_moniker, customer_id, is_active):
-
-    response = db.scan(
-        TableName=order_table_name,
-        IndexName='index_name',
-        ProjectionExpression=[
-            'id',
-            'retailer_moniker',
-            'customer_id',
-            'order_id',
-            'locale',
-            'order_pref_json',
-            'created_datetime',
-            'modified_datetime'
-        ],
-        Limit=100,
-        Select='SPECIFIC_ATTRIBUTES',
-        FilterExpression='EQ',
-
-    )
-
-def __populateRecordFromDynamoDB(response):
+    results = []
     result = {}
-
-    if response == None or response.get('Item') == None:
+    if not response or not response.get('Item'):
         return result
 
-    item = response.get('Item')
+    result = __populateRecordFromDynamoDB(response.get('Item'))
+    results.append(result)
+
+    return results
+
+def __findAllOrderPreferences(db, key, is_include_inactive):
+
+    # Only look for records with is_active = True if is_include_inactive == False
+    filter_expression = ''
+    exp_attr_values = {}
+    if not is_include_inactive:
+        expression_attribute_values = {
+            ':scan_id': { 'S': key },
+            ':is_active_true': {'BOOL': True},
+        }
+        filter_expression = 'is_active = :is_active_true'
+    else:
+        expression_attribute_values = {
+            ':scan_id': { 'S': key },
+            ':is_active_true': {'BOOL': True},
+            ':is_active_false': {'BOOL': False},
+        }
+        filter_expression = 'is_active in (:is_active_true, :is_active_false)'
+
+    response = db.query(
+        TableName=order_table_name,
+        IndexName=order_table_gsi_name,
+        Limit=100,
+        Select='ALL_ATTRIBUTES',
+        ExpressionAttributeValues=expression_attribute_values,
+        KeyConditionExpression='scan_id = :scan_id',
+        FilterExpression=filter_expression,
+    )
+
+    # TODO: take this out later!
+    # Debugging section (trouble-shooting an issue where I get 'internal error' response - most likely some issue with the way table and GSI is creaated).
+    try:
+        msg = type(response)
+    except Exception as e:
+        error_msgs = []
+        error_msgs.append(ResponseMessage('WARN', None, None, e.args[0] + ': ' + msg))
+        raise InputValidationException(error_msgs)
+    # End of debugging
+
+    results = []
+    items = []
+    if not response:
+        return results
+
+    items = response.get('Items')
+    if not items:
+        return results
+
+    for item in items:
+        result = __populateRecordFromDynamoDB(item)
+        results.append(result)
+
+    return results
+
+def __populateRecordFromDynamoDB(item):
+    result = {}
+
+    if item == None:
+        return result
+
     if item.get('id') != None:
-        result['id'] = response.get('Item').get('id').get('S')
+        result['id'] = item.get('id').get('S')
     if item.get('retailer_moniker') != None:
-        result['retailer_moniker'] = response.get('Item').get('retailer_moniker').get('S')
+        result['retailer_moniker'] = item.get('retailer_moniker').get('S')
     if item.get('customer_id') != None:
-        result['customer_id'] = response.get('Item').get('customer_id').get('S')
+        result['customer_id'] = item.get('customer_id').get('S')
     if item.get('order_id') != None:
-        result['order_id'] = response.get('Item').get('order_id').get('S')
+        result['order_id'] = item.get('order_id').get('S')
+    if item.get('is_active') != None:
+        result['is_active'] = item.get('is_active').get('BOOL')
     if item.get('created_datetime') != None:
-        result['created_datetime'] = response.get('Item').get('created_datetime').get('S')
+        result['created_datetime'] = item.get('created_datetime').get('S')
     if item.get('modified_datetime') != None:
-        result['modified_datetime'] = response.get('Item').get('modified_datetime').get('S')
+        result['modified_datetime'] = item.get('modified_datetime').get('S')
     if item.get('order_pref_json') != None:
-        order_pref = json.loads(response.get('Item').get('order_pref_json').get('S'))
+        order_pref = json.loads(item.get('order_pref_json').get('S'))
         # Populate modified_datetime for client display purposes:
         order_pref['modified_datetime'] = result.get('modified_datetime')
         result['order_pref_json'] = json.dumps(order_pref)
@@ -231,30 +334,38 @@ def __populateRecordFromDynamoDB(response):
     return result
 
 def __makeOrderDetails(response):
-    result = {}
+    results = []
 
     if response == None:
-        return result
+        return results
 
-    if response.get('order_pref_json') != None:
-        order_pref_json = json.loads(response.get('order_pref_json'))
+    for item in response:
+        if item.get('order_pref_json') != None:
+            result = {}
+            order_pref_json = json.loads(item.get('order_pref_json'))
 
-        order_pref = {}
+            order_pref = {}
 
-        order_pref['first_name'] = order_pref_json.get('first_name')
-        order_pref['last_name'] = order_pref_json.get('last_name')
-        order_pref['locale'] = order_pref_json.get('locale')
-        order_pref['is_guest'] = order_pref_json.get('is_guest')
-        order_pref['notification_pref'] = order_pref_json.get('notification_pref')
-        order_pref['notification_pref_details'] = order_pref_json.get('notification_pref_details')
-        order_pref['modified_datetime'] = response.get('modified_datetime')
+            order_pref['first_name'] = order_pref_json.get('first_name')
+            order_pref['last_name'] = order_pref_json.get('last_name')
+            order_pref['locale'] = order_pref_json.get('locale')
+            order_pref['is_guest'] = order_pref_json.get('is_guest')
+            order_pref['is_active'] = item.get('is_active')
+            order_pref['notification_pref'] = order_pref_json.get('notification_pref')
+            order_pref['notification_pref_details'] = order_pref_json.get('notification_pref_details')
+            order_pref['modified_datetime'] = item.get('modified_datetime')
 
-        result[response.get('order_id')] = order_pref
+            result[item.get('order_id')] = order_pref
+            results.append(result)
 
-    return result
+    return results
 
 def __makeKey(retailer_moniker, customer_id, order_id):
-    return ''.join([retailer_moniker, keyDelim, customer_id, keyDelim, order_id])
+    key = ''.join([retailer_moniker, keyDelim, customer_id])
+    if order_id:
+        key = ''.join([key, keyDelim, order_id])
+
+    return key
 
 def __makeResponse(order_preferences, exception, event):
     status = 'success'
