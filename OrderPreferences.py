@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 import datetime
@@ -52,14 +54,9 @@ def method_get(event, context):
     # Basic input validation:
     try:
         error_msgs = []
+
         retailer_moniker = event.get('pathParameters').get('retailer_moniker')
         customer_id = event.get('pathParameters').get('customer_id')
-
-        is_include_inactive = event.get('queryStringParameters').get('is_include_inactive')
-        if not is_include_inactive or is_include_inactive.casefold() != 'true':
-            is_include_inactive = False
-        else:
-            is_include_inactive = True
 
         if not retailer_moniker:
             error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
@@ -68,40 +65,47 @@ def method_get(event, context):
         if len(error_msgs) > 0:
             raise InputValidationException(error_msgs)
 
+        is_include_inactive_str = None
+        order_id = None
         if event.get('queryStringParameters'):
+            is_include_inactive_str = event.get('queryStringParameters').get('is_include_inactive')
             order_id = event.get('queryStringParameters').get('order_id') or None
+
+        if not is_include_inactive_str or is_include_inactive_str.casefold() != 'true':
+            is_include_inactive = False
+        else:
+            is_include_inactive = True
+
     except InputValidationException as e:
         exception = e
 
+    if exception != None:
+        return __makeResponse([], exception, None)
+    # END OF: Basic input validation
+
     try:
         order_preferences = []
-        if exception != None:
-            return __makeResponse(order_preferences, exception, None)
-        # END OF: Basic input validation
 
         key = __makeKey(retailer_moniker, customer_id, order_id)
+
         db = boto3.client('dynamodb');
-        if order_id:
-            result = {}
-            try:
+        try:
+            if order_id:
+                result = {}
                 result = __findOrderPreference(db, key)
                 order_preferences = __makeOrderDetails(result)
-            except Exception as e:
-                exception = e # Preserve exception for the response.
-                # TODO: Log the exception.
-        else:
-            result = []
-            try:
+            else:
+                result = []
                 result = __findAllOrderPreferences(db, key, is_include_inactive)
                 order_preferences = __makeOrderDetails(result)
-            except Exception as e:
-                exception = e # Preserve exception for the response.
-                # TODO: Log the exception.
+        except Exception as e:
+            exception = e # Preserve exception for the response.
+            # TODO: Log the exception.
+            print('Exception getting order preferences for key: [' + key + ']')
     except Exception as e:
         exception = e
 
     return __makeResponse(order_preferences, exception, None)
-    #return test.method_get(event, context)
 
 def method_post_put(event, context):
     exception = None
@@ -131,9 +135,11 @@ def method_post_put(event, context):
             raise InputValidationException(error_msgs)
 
         __validateOrderPreferences(order_prefs)
+
     except Exception as e:
         exception = e
         # TODO: Log exception here.
+        print('Exception saving order preferences: [' + json.dumps(error_msgs) + ']')
 
     if exception != None:
         return __makeResponse(order_preferences, exception, None)
@@ -142,11 +148,13 @@ def method_post_put(event, context):
     input = {}
     db = boto3.client('dynamodb')
     try:
+
         is_active = True # TODO: hard-coding for now - need to discuss use-cases further!
         __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active, order_prefs, event.get('httpMethod'))
     except Exception as e:
         exception = e # Preserve exception for later response.
         # TODO: Log exception here.
+        print('Exception saving order preferences: [' + json.dumps(error_msgs) + ']')
 
     id = __makeKey(retailer_moniker, customer_id, order_id)
 
@@ -171,7 +179,10 @@ def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active
     created_datetime = modified_datetime
 
     # Find if the record already exists and perform some checks:
-    dbRec = __findOrderPreference(db, id)[0]
+    dbRecs = __findOrderPreference(db, id)
+    dbRec = None if not dbRecs else dbRecs[0]
+    #dbRec = __findOrderPreference(db, id)[0] or None
+    print('VLAD: __findOrderPreference call executed successfully.')
 
     if(httpMethod == 'POST' and dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_POST_DATA_EXISTS))
@@ -215,6 +226,7 @@ def __save(db, id, retailer_moniker, customer_id, order_id, is_active, order_pre
             'retailer_moniker': {'S': retailer_moniker},
             'customer_id': {'S': customer_id},
             'order_id': {'S': order_id},
+            #'is_guest': {'BOOL': is_guest },
             'is_active': {'BOOL': is_active },
             'order_pref_json': {'S': order_pref_json},
             'created_datetime': {'S': created_datetime},
@@ -235,6 +247,8 @@ def __findOrderPreference(db, key):
             'retailer_moniker',
             'customer_id',
             'order_id',
+            'is_guest',
+            'is_active',
             'order_pref_json',
             'created_datetime',
             'modified_datetime'
@@ -274,7 +288,7 @@ def __findAllOrderPreferences(db, key, is_include_inactive):
         TableName=order_table_name,
         IndexName=order_table_gsi_name,
         Limit=100,
-        Select='ALL_ATTRIBUTES',
+        Select='ALL_PROJECTED_ATTRIBUTES',
         ExpressionAttributeValues=expression_attribute_values,
         KeyConditionExpression='scan_id = :scan_id',
         FilterExpression=filter_expression,

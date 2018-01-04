@@ -59,8 +59,8 @@ def method_get(event, context):
             error_msgs.append(ResponseMessage('ERROR', None, 'customer_id', VALIDATION_MSG_CUSTOMER_ID))
         if len(error_msgs) > 0:
             raise InputValidationException(error_msgs)
-    except InputValidationException as ivrme:
-        exception = ivrme
+    except InputValidationException as e:
+        exception = e
 
     customer_preferences = {}
     if exception != None:

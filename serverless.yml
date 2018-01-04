@@ -134,7 +134,13 @@ resources:
             Projection:
               ProjectionType: INCLUDE
               NonKeyAttributes:
+                - retailer_moniker
+                - customer_id
+                - order_id
+                - is_guest
                 - is_active
+                - order_pref_json
+                - modified_datetime
             ProvisionedThroughput:
               ReadCapacityUnits: 1
               WriteCapacityUnits: 1
