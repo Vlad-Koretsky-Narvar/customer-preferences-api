@@ -20,7 +20,6 @@ VALIDATION_MSG_RETAILER_MONIKER = 'Invalid input: missing required [retailer] pa
 VALIDATION_MSG_CUSTOMER_ID = 'Invalid input: missing required [customer_id] parameter!'
 VALIDATION_MSG_ORDER_ID = 'Invalid input: missing required [order_id] parameter!'
 VALIDATION_MSG_STALE_DATA_MODIFICATION = 'Stale data modification: the record you are trying to update has been updated by another process. Please refer to [modified_datetime] field in order_preferences in the response for correct value to use.'
-VALIDATION_MSG_ORDER_PREFS = 'Invalid input: missing required [order_preferences] section parameter in request body.'
 VALIDATION_MSG_POST_DATA_EXISTS = 'Invalid input: you are trying to submit a POST request on an existing order_preference. Use PUT instead.'
 VALIDATION_MSG_PUT_DATA_NOT_EXISTS = 'Invalid input: you are tyring to submit a PUT request on an order_preference that does not exist. Use POST instead.'
 VALIDATION_MSG_ORDER_PREFS = 'Invalid input: missing required [order_preferences] section parameter in request body.'
@@ -31,6 +30,7 @@ VALIDATION_MSG_NOTIFICATION_PREFS_DETAILS = 'Invalid input: missing required [no
 VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_LENGTH = 'Invalid input: channels in [notification_pref] must match with their [notification_pref_details].'
 VALIDATION_MSG_NOTIFICATION_PREFS_AND_DETAILS_MISMATCH_ITEM = 'Invalid input: missing order [notification_pref_details] for: '
 VALIDATION_MSG_NOTIFICATION_PREFS_CHANNEL = 'Invalid input: invalid notification preference value. Supported values are: ' + ''.join([NOTIFICATION_PREF_SMS, keyDelim, NOTIFICATION_PREF_FB, keyDelim, NOTIFICATION_PREF_EMAIL])
+VALIDATION_MSG_INACTIVE_RECORD_INSERT = 'Invalid input: [is_active] must be TRUE when inserting new order preferences record.'
 
 class InputValidationException(Exception):
     # Server Validation Exception
@@ -46,6 +46,9 @@ class ResponseMessage:
         self.code = code
         self.field = field
         self.message = message
+
+def __default(o):
+    return o.__dict__
 
 def method_get(event, context):
     exception = None
@@ -116,6 +119,7 @@ def method_post_put(event, context):
         retailer_moniker = event.get('pathParameters').get('retailer_moniker')
         customer_id = event.get('pathParameters').get('customer_id')
         order_id = event.get('pathParameters').get('order_id')
+
         if not retailer_moniker:
             error_msgs.append(ResponseMessage('ERROR', None, 'retailer', VALIDATION_MSG_RETAILER_MONIKER))
         if not customer_id:
@@ -134,12 +138,12 @@ def method_post_put(event, context):
             error_msgs.append(ResponseMessage('ERROR', None, 'order_preferences', VALIDATION_MSG_ORDER_PREFS))
             raise InputValidationException(error_msgs)
 
-        __validateOrderPreferences(order_prefs)
+        __validateOrderPreferences(order_prefs, event.get('httpMethod'))
 
     except Exception as e:
         exception = e
         # TODO: Log exception here.
-        print('Exception saving order preferences: [' + json.dumps(error_msgs) + ']')
+        print('Exception saving order preferences: [' + json.dumps(error_msgs, default=__default) + ']')
 
     if exception != None:
         return __makeResponse(order_preferences, exception, None)
@@ -149,12 +153,12 @@ def method_post_put(event, context):
     db = boto3.client('dynamodb')
     try:
 
-        is_active = True # TODO: hard-coding for now - need to discuss use-cases further!
-        __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active, order_prefs, event.get('httpMethod'))
+        # TODO: Need to discuss is_active use-cases further!
+        __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_prefs, event.get('httpMethod'))
     except Exception as e:
         exception = e # Preserve exception for later response.
         # TODO: Log exception here.
-        print('Exception saving order preferences: [' + json.dumps(error_msgs) + ']')
+        print('Exception saving order preferences: [' + json.dumps(error_msgs, default=__default) + ']')
 
     id = __makeKey(retailer_moniker, customer_id, order_id)
 
@@ -167,27 +171,31 @@ def method_post_put(event, context):
 
     return __makeResponse(order_preferences, exception, None)
 
-def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active, order_preferences, httpMethod):
+def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, order_preferences, http_method):
     error_msgs = []
 
     id = __makeKey(retailer_moniker, customer_id, order_id)
 
+    # Grab some fields from order_preferences that are not stored in order_pref_json field (they are stored on record-level as stand-alone fields):
     modified_datetime = order_preferences.get('modified_datetime')
-    if not modified_datetime:
+    # Modified_date value may or may not be provided in post (should be overwritten to current timestamp):
+    if not modified_datetime or http_method.casefold() == 'post':
         modified_datetime = datetime.datetime.utcnow().isoformat()
-
     created_datetime = modified_datetime
+    is_active = order_preferences.get('is_active')
+
+    # Strip out modified_datetime and is_active from order_pref_json input (it is there only for the client display purposes):
+    order_preferences.pop('modified_datetime', None)
+    order_preferences.pop('is_active', None)
 
     # Find if the record already exists and perform some checks:
     dbRecs = __findOrderPreference(db, id)
     dbRec = None if not dbRecs else dbRecs[0]
-    #dbRec = __findOrderPreference(db, id)[0] or None
-    print('VLAD: __findOrderPreference call executed successfully.')
 
-    if(httpMethod == 'POST' and dbRec):
+    if(http_method.casefold() == 'post' and dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_POST_DATA_EXISTS))
         raise InputValidationException(error_msgs)
-    elif(httpMethod == 'PUT' and not dbRec):
+    elif(http_method.casefold() == 'put' and not dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_PUT_DATA_NOT_EXISTS))
         raise InputValidationException(error_msgs)
 
@@ -204,10 +212,6 @@ def __saveOrderPreference(db, retailer_moniker, customer_id, order_id, is_active
             raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
-            # Strip out modified_datetime and is_active from order_pref_json input (it is there only for the client display):
-            order_preferences.pop('modified_datetime', None)
-            order_preferences.pop('is_active', None)
-
 
     __save(db, id, retailer_moniker, customer_id, order_id, is_active, order_preferences, created_datetime, modified_datetime)
 
@@ -341,8 +345,9 @@ def __populateRecordFromDynamoDB(item):
         result['modified_datetime'] = item.get('modified_datetime').get('S')
     if item.get('order_pref_json') != None:
         order_pref = json.loads(item.get('order_pref_json').get('S'))
-        # Populate modified_datetime for client display purposes:
+        # Populate some fields for client display purposes:
         order_pref['modified_datetime'] = result.get('modified_datetime')
+        order_pref['is_active'] = result.get('is_active')
         result['order_pref_json'] = json.dumps(order_pref)
 
     return result
@@ -427,12 +432,12 @@ def __makeResponse(order_preferences, exception, event):
     return response
 
 # TODO: implement.
-def __validateOrderPreferences(order_preferences):
+def __validateOrderPreferences(order_preferences, http_method):
     error_msgs = []
 
     # No point in checking further if this check fails:
     if not order_preferences:
-        error_msgs.append(ResponseMessage('ERROR', None, 'customer_preferences', VALIDATION_MSG_ORDER_PREFS))
+        error_msgs.append(ResponseMessage('ERROR', None, 'order_preferences', VALIDATION_MSG_ORDER_PREFS))
         raise InputValidationException(error_msgs)
 
     if(not order_preferences.get('first_name')):
@@ -475,6 +480,11 @@ def __validateOrderPreferences(order_preferences):
         idx += 1
 
     if len(error_msgs) > 0:
+        raise InputValidationException(error_msgs)
+
+    # Preference must be active in order to be inserted (active => inactive update allowed):
+    if(http_method.casefold() == 'post' and order_preferences.get('is_active') == False):
+        error_msgs.append(ResponseMessage('ERROR', None, 'is_active', VALIDATION_MSG_INACTIVE_RECORD_INSERT))
         raise InputValidationException(error_msgs)
 
     # Default locale if missing:

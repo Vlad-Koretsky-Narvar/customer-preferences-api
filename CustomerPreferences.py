@@ -125,12 +125,13 @@ def method_post_put(event, context):
 
     return __makeResponse(customer_preferences, exception, None)
 
-def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences, httpMethod):
+def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences, http_method):
 
     id = __makeKey(retailer_moniker, customer_id)
 
+    # Modified_date value may or may not be provided in post (should be overwritten to current timestamp):
     modified_datetime = cust_preferences.get('modified_datetime')
-    if not modified_datetime:
+    if not modified_datetime or http_method.casefold() == 'post':
         modified_datetime = datetime.datetime.utcnow().isoformat()
 
     created_datetime = modified_datetime
@@ -139,10 +140,10 @@ def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences
     dbRec = __findCustomerPreference(db, id)
 
     error_msgs = []
-    if(httpMethod == 'POST' and dbRec):
+    if(http_method.casefold() == 'post' and dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_POST_DATA_EXISTS))
         raise InputValidationException(error_msgs)
-    elif(httpMethod == 'PUT' and not dbRec):
+    elif(http_method.casefold() == 'put' and not dbRec):
         error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_PUT_DATA_NOT_EXISTS))
         raise InputValidationException(error_msgs)
 
@@ -158,8 +159,9 @@ def __saveCustomerPreference(db, retailer_moniker, customer_id, cust_preferences
             raise InputValidationException(error_msgs)
         else:
             modified_datetime = datetime.datetime.utcnow().isoformat()
-            # Strip out modified_datetime from cust_pref_json input (it is there only for the client display):
-            cust_preferences.pop('modified_datetime', None)
+
+    # Strip out modified_datetime from cust_pref_json input (it is there only for the client display):
+    cust_preferences.pop('modified_datetime', None)
 
     __save(db, id, retailer_moniker, customer_id, cust_preferences, created_datetime, modified_datetime)
 
