@@ -42,6 +42,9 @@ provider:
         - { "Fn::GetAtt": [ "OrderPreferencesDynamoDBTable", "Arn" ] }
         - "arn:aws:dynamodb:${self:provider.region}:${self:provider.accountNo}:table/${self:custom.orderPreferencesTableName}/index/*"
 
+plugins:
+  - serverless-python-requirements
+
 functions:
   get_customer_preference:
     handler: CustomerPreferences.method_get

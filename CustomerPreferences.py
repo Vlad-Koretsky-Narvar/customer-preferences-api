@@ -1,14 +1,24 @@
+from __future__ import print_function
+
 import boto3
 import datetime
 import json
+import re
+import requests
 import traceback
 
-cust_table_name = 'customer-preferences-dev'
+API_NAME = 'customer-preferences'
+BEARER_CERTIFICATE = '54d7af99-60e5-474c-ab06-fe273077d3c3' # Hard-coded for now here and in AuthenticateAndAuthorizeService.
+CUST_TABLE_NAME = 'customer-preferences-dev'
 keyDelim = '|'
 
 NOTIFICATION_PREF_SMS = 'SMS'
 NOTIFICATION_PREF_FB = 'FB'
 NOTIFICATION_PREF_EMAIL = 'EMAIL'
+
+# TODO: This needs to be environment-based!
+BASE_AUTH_URL = 'https://gzwtwzledp.localtunnel.me/api/authenticate-authorize'
+
 
 VALIDATION_MSG_CUSTOMER_ID = 'Invalid input: missing required [customer_id] parameter!'
 VALIDATION_MSG_RETAILER_MONIKER = 'Invalid input: missing required [retailer] parameter in customer_preferences!'
@@ -51,7 +61,14 @@ def method_get(event, context):
     # Basic input validation:
     try:
         error_msgs = []
+
         retailer_moniker = event['pathParameters']['retailer_moniker']
+        print("VLAD: Calling __authenticateAndAuthorizeRequest()...")
+        retailer_moniker = __authenticateAndAuthorizeRequest(event)
+        if not retailer_moniker:
+            # TODO: Change the error message or make authenticate throw exception.
+            error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
+
         customer_id = event['pathParameters']['customer_id']
         if not retailer_moniker or retailer_moniker == 'narvar-speedee':
             error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
@@ -171,7 +188,7 @@ def __save(db, id, retailer_moniker, customer_id, cust_preferences, created_date
     customer_pref_json = json.dumps(cust_preferences)
 
     response = db.put_item(
-        TableName = cust_table_name,
+        TableName = CUST_TABLE_NAME,
         Item={
             'id': {'S': id},
             'retailer_moniker': {'S': retailer_moniker},
@@ -186,7 +203,7 @@ def __save(db, id, retailer_moniker, customer_id, cust_preferences, created_date
 def __findCustomerPreference(db, key):
 
     response = db.get_item(
-        TableName=cust_table_name,
+        TableName=CUST_TABLE_NAME,
         Key={'id': {'S': key}},
         ConsistentRead=True,
         ReturnConsumedCapacity='NONE',
@@ -203,6 +220,54 @@ def __findCustomerPreference(db, key):
     result = __populateRecordFromDynamoDB(response)
 
     return result
+
+# This method will call an internal service (NarvarApps) that will perform authentication and authorization.
+# If successful, authorization header credentials will be translated into a retailer_moniker that is needed for
+# further processing.
+def __authenticateAndAuthorizeRequest(event):
+    retailer_moniker = None
+
+    authorization_header = event['headers']['Authorization']
+    print("VLAD: authorization_header = " + authorization_header)
+    if not authorization_header:
+        return retailer_moniker
+
+    basic_auth_header_regex = re.compile(r'^(?:basic)(.+$)', re.IGNORECASE)
+    mo = basic_auth_header_regex.search(authorization_header)
+
+    print("VLAD: match object not empty is: " + str(mo))
+    print("VLAD: number of groups is: " + str(0 if not mo else mo.groups().__len__()))
+    if not mo or mo.groups().__len__() != 1:
+        print("VLAD: Authorization is missing or is of the wrong type: " + authorization_header)
+        return retailer_moniker
+
+    # Construct URL:
+    request_params = { 'apiName': API_NAME }
+    print("VLAD: request_params are: " + json.dumps(request_params))
+
+    # Populate headers:
+    request_headers = {}
+    request_headers.update({'Authorization': authorization_header})
+    request_headers.update({'Bearer': BEARER_CERTIFICATE})
+    request_headers.update({'Content-Type': 'application/json'})
+    print("VLAD: request_headers are: " + json.dumps(request_headers))
+    print("VLAD: url is: " + BASE_AUTH_URL)
+
+    # Send request:
+    response = requests.get(BASE_AUTH_URL, params = request_params, headers = request_headers)
+    if not response:
+        print("Something went wrong: no response from AuthenticateAndAuthorize service call... response is empty")
+        return retailer_moniker
+
+    if response.status_code != 200:
+        print("Something went wrong: no response from AuthenticateAndAuthorize service call... response is: " + str(response.status_code))
+        return retailer_moniker
+
+    payload_response = response.json()
+    retailer_moniker = payload_response.get('retailerMoniker')
+
+    return retailer_moniker
+
 
 def __validateCustomerPreferences(cust_preferences):
     error_msgs = []
