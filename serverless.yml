@@ -47,7 +47,7 @@ plugins:
 
 functions:
   get_customer_preference:
-    handler: CustomerPreferences.method_get
+    handler: customer_preferences.method_get
     #handler: handler.hello_get
     events:
       - http:
@@ -55,7 +55,7 @@ functions:
           #path: /hello/
           method: get
   post_customer_preference:
-    handler: CustomerPreferences.method_post_put
+    handler: customer_preferences.method_post_put
     #handler: handler.hello_post
     events:
       - http:
@@ -63,7 +63,7 @@ functions:
           #path: /hello/
           method: post
   put_customer_preference:
-    handler: CustomerPreferences.method_post_put
+    handler: customer_preferences.method_post_put
     #handler: handler.hello_post
     events:
       - http:
@@ -71,7 +71,7 @@ functions:
           #path: /hello/
           method: put
   get_order_preference:
-    handler: OrderPreferences.method_get
+    handler: order_preferences.method_get
     #handler: test.method_get
     events:
       - http:
@@ -79,13 +79,13 @@ functions:
           #path: /hello/
           method: get
   post_order_preference:
-    handler: OrderPreferences.method_post_put
+    handler: order_preferences.method_post_put
     events:
       - http:
           path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}/order/{order_id}
           method: post
   put_order_preference:
-    handler: OrderPreferences.method_post_put
+    handler: order_preferences.method_post_put
     events:
       - http:
           path: /api/v1/order-preferences/retailer/{retailer_moniker}/customer/{customer_id}/order/{order_id}

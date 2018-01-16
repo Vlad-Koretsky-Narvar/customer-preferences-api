@@ -6,8 +6,6 @@ import authenticate_and_authorize
 import boto3
 import datetime
 import json
-import re
-import requests
 import request_validator
 import traceback
 

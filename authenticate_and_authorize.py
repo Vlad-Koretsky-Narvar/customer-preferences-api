@@ -9,7 +9,7 @@ API_NAME = 'customer-preferences'
 BEARER_CERTIFICATE = '54d7af99-60e5-474c-ab06-fe273077d3c3' # Hard-coded for now here and in AuthenticateAndAuthorizeService.
 
 # TODO: This needs to be environment-based!
-BASE_AUTH_URL = 'https://uzrjgtdaje.localtunnel.me/api/authenticate-authorize'
+BASE_AUTH_URL = 'https://blojewhreg.localtunnel.me/api/authenticate-authorize'
 
 # This method will call an internal service (NarvarApps) that will perform authentication and authorization.
 # If successful, authorization header credentials will be translated into a retailer_moniker that is needed for
