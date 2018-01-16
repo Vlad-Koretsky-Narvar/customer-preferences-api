@@ -1,4 +1,5 @@
 from __future__ import print_function
+from http import HTTPStatus
 
 import boto3
 import datetime
@@ -17,9 +18,9 @@ NOTIFICATION_PREF_FB = 'FB'
 NOTIFICATION_PREF_EMAIL = 'EMAIL'
 
 # TODO: This needs to be environment-based!
-BASE_AUTH_URL = 'https://gzwtwzledp.localtunnel.me/api/authenticate-authorize'
+BASE_AUTH_URL = 'https://dstnhslyet.localtunnel.me/api/authenticate-authorize'
 
-
+VALIDATION_MSG_REQUEST_FAILED_AUTHENTICATION_OR_AUTHORIZATION = 'The client has not provided valid credentials or is not authorized to use this API.'
 VALIDATION_MSG_CUSTOMER_ID = 'Invalid input: missing required [customer_id] parameter!'
 VALIDATION_MSG_RETAILER_MONIKER = 'Invalid input: missing required [retailer] parameter in customer_preferences!'
 VALIDATION_MSG_STALE_DATA_MODIFICATION = 'Stale data modification: the record you are trying to update has been updated by another process. Please refer to [modified_datetime] field in customer_preferences in the response for correct value to use.'
@@ -64,10 +65,20 @@ def method_get(event, context):
 
         retailer_moniker = event['pathParameters']['retailer_moniker']
         print("VLAD: Calling __authenticateAndAuthorizeRequest()...")
-        retailer_moniker = __authenticateAndAuthorizeRequest(event)
-        if not retailer_moniker:
-            # TODO: Change the error message or make authenticate throw exception.
-            error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
+        auth_response = __authenticateAndAuthorizeRequest(event)
+        print("VLAD: Finished calling __authenticateAndAuthorizeRequest()...")
+        retailer_moniker = auth_response.get('retailer_moniker')
+
+        print("VLAD: auth_response.status = " + str(auth_response.get('status')))
+        print("VLAD: auth_response is: " + json.dumps(auth_response))
+        print("VLAD: retailer_moniker = " + str(auth_response.get('retailer_moniker')))
+        if auth_response.get('status') != HTTPStatus.OK.value or not retailer_moniker:
+            error_msgs.append(ResponseMessage('ERROR', None, None, VALIDATION_MSG_REQUEST_FAILED_AUTHENTICATION_OR_AUTHORIZATION))
+            raise InputValidationException(error_msgs)
+
+        #if not retailer_moniker:
+        #    # TODO: Change the error message or make authenticate throw exception.
+        #    error_msgs.append(ResponseMessage('ERROR', None, 'retailer_name', VALIDATION_MSG_RETAILER_MONIKER))
 
         customer_id = event['pathParameters']['customer_id']
         if not retailer_moniker or retailer_moniker == 'narvar-speedee':
@@ -225,12 +236,14 @@ def __findCustomerPreference(db, key):
 # If successful, authorization header credentials will be translated into a retailer_moniker that is needed for
 # further processing.
 def __authenticateAndAuthorizeRequest(event):
-    retailer_moniker = None
+    result = {}
+    result['retailer_moniker'] = None
 
     authorization_header = event['headers']['Authorization']
-    print("VLAD: authorization_header = " + authorization_header)
+    #print("authorization_header = " + authorization_header)
     if not authorization_header:
-        return retailer_moniker
+        result['status'] = HTTPStatus.UNAUTHORIZED.value
+        return result
 
     basic_auth_header_regex = re.compile(r'^(?:basic)(.+$)', re.IGNORECASE)
     mo = basic_auth_header_regex.search(authorization_header)
@@ -238,8 +251,9 @@ def __authenticateAndAuthorizeRequest(event):
     print("VLAD: match object not empty is: " + str(mo))
     print("VLAD: number of groups is: " + str(0 if not mo else mo.groups().__len__()))
     if not mo or mo.groups().__len__() != 1:
-        print("VLAD: Authorization is missing or is of the wrong type: " + authorization_header)
-        return retailer_moniker
+        print("Authorization is missing or is of the wrong type: " + authorization_header)
+        result['status'] = HTTPStatus.UNAUTHORIZED.value
+        return result
 
     # Construct URL:
     request_params = { 'apiName': API_NAME }
@@ -257,16 +271,21 @@ def __authenticateAndAuthorizeRequest(event):
     response = requests.get(BASE_AUTH_URL, params = request_params, headers = request_headers)
     if not response:
         print("Something went wrong: no response from AuthenticateAndAuthorize service call... response is empty")
-        return retailer_moniker
+        result['status'] = HTTPStatus.UNAUTHORIZED.value
+        return result
 
-    if response.status_code != 200:
+    print("VLAD: response.status_code = " + str(response.status_code))
+
+    if response.status_code != HTTPStatus.OK.value:
         print("Something went wrong: no response from AuthenticateAndAuthorize service call... response is: " + str(response.status_code))
-        return retailer_moniker
+        result['status'] = response.status_code
+        return result
 
     payload_response = response.json()
-    retailer_moniker = payload_response.get('retailerMoniker')
+    result['status'] = HTTPStatus.OK.value
+    result['retailer_moniker'] = payload_response.get('retailerMoniker')
 
-    return retailer_moniker
+    return result
 
 
 def __validateCustomerPreferences(cust_preferences):
